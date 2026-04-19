@@ -2,18 +2,99 @@
     let q = prompt('Masukkan kata/query yang mau dilacak (contoh: 1amkaiz3n, sepatu):');
     if(!q) return;
     
+    // =============== GENERATE SEMUA KEMUNGKINAN ENCODING ===============
+    function generateEncodings(input) {
+        let variants = new Set();
+        variants.add(input); // asli
+        
+        // URL encode
+        variants.add(encodeURIComponent(input));
+        variants.add(encodeURIComponent(input).toLowerCase());
+        variants.add(encodeURIComponent(input).toUpperCase());
+        
+        // HTML entity encode
+        let htmlEncoded = input.replace(/[&<>]/g, function(m) {
+            if(m === '&') return '&amp;';
+            if(m === '<') return '&lt;';
+            if(m === '>') return '&gt;';
+            return m;
+        });
+        variants.add(htmlEncoded);
+        
+        // Double HTML encode
+        let doubleHtmlEncoded = htmlEncoded.replace(/[&<>]/g, function(m) {
+            if(m === '&') return '&amp;';
+            if(m === '<') return '&lt;';
+            if(m === '>') return '&gt;';
+            return m;
+        });
+        variants.add(doubleHtmlEncoded);
+        
+        // Unicode escape (\\uXXXX)
+        let unicodeEncoded = '';
+        for(let i = 0; i < input.length; i++) {
+            unicodeEncoded += '\\u' + input.charCodeAt(i).toString(16).padStart(4, '0');
+        }
+        variants.add(unicodeEncoded);
+        
+        // Lowercase/uppercase variants
+        variants.add(input.toLowerCase());
+        variants.add(input.toUpperCase());
+        
+        // Mixed encoding combinations
+        if(input.includes('<')) {
+            variants.add(input.replace(/</g, '%3c'));
+            variants.add(input.replace(/</g, '%3C'));
+            variants.add(input.replace(/</g, '&lt;'));
+            variants.add(input.replace(/</g, '\\u003c'));
+        }
+        if(input.includes('>')) {
+            variants.add(input.replace(/>/g, '%3e'));
+            variants.add(input.replace(/>/g, '%3E'));
+            variants.add(input.replace(/>/g, '&gt;'));
+            variants.add(input.replace(/>/g, '\\u003e'));
+        }
+        
+        return Array.from(variants);
+    }
+    
+    let encodings = generateEncodings(q);
+    let encodingMap = {};
+    encodings.forEach(enc => {
+        encodingMap[enc] = true;
+    });
+    
+    console.log(`[XSS] Mencari ${encodings.length} variasi encoding dari "${q}"`);
+    
+    // =============== CEK APAKAH STRING MATCH SALAH SATU ENCODING ===============
+    function matchesEncoding(str) {
+        if(!str) return false;
+        for(let enc of encodings) {
+            if(str.includes(enc)) return true;
+        }
+        return false;
+    }
+    
+    function getMatchedEncoding(str) {
+        for(let enc of encodings) {
+            if(str.includes(enc)) return enc;
+        }
+        return null;
+    }
+    
     let results = [];
     let totalHits = 0;
     
-    // 1. SCAN TEXT NODES (tanpa deduplikasi)
+    // 1. SCAN TEXT NODES
     let walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-        acceptNode: n => n.textContent && n.textContent.includes(q) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP
+        acceptNode: n => n.textContent && matchesEncoding(n.textContent) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP
     });
     while(walker.nextNode()) {
         let n = walker.currentNode;
         let p = n.parentElement;
         if(p) {
             totalHits++;
+            let matchedEnc = getMatchedEncoding(n.textContent);
             results.push({
                 type: '📝 TEXT NODE',
                 tag: p.tagName,
@@ -21,16 +102,19 @@
                 class: p.className || '-',
                 path: getPath(p),
                 html: p.outerHTML,
-                context: n.textContent.substring(0, 100)
+                context: n.textContent.substring(0, 150),
+                matchedEncoding: matchedEnc,
+                originalQuery: q
             });
         }
     }
     
-    // 2. SCAN ATTRIBUTES (tanpa deduplikasi)
+    // 2. SCAN ATTRIBUTES
     document.querySelectorAll('*').forEach(el => {
         for(let a of el.attributes) {
-            if(a.value && a.value.includes(q)) {
+            if(a.value && matchesEncoding(a.value)) {
                 totalHits++;
+                let matchedEnc = getMatchedEncoding(a.value);
                 results.push({
                     type: `🔑 ATTRIBUTE [${a.name}]`,
                     tag: el.tagName,
@@ -39,17 +123,20 @@
                     path: getPath(el),
                     html: el.outerHTML,
                     attrName: a.name,
-                    attrValue: a.value.substring(0, 100)
+                    attrValue: a.value.substring(0, 150),
+                    matchedEncoding: matchedEnc,
+                    originalQuery: q
                 });
             }
         }
     });
     
-    // 3. SCAN SCRIPT TAGS (khusus biar lebih detil)
+    // 3. SCAN SCRIPT TAGS
     document.querySelectorAll('script').forEach(script => {
         let content = script.textContent;
-        if(content && content.includes(q)) {
+        if(content && matchesEncoding(content)) {
             totalHits++;
+            let matchedEnc = getMatchedEncoding(content);
             results.push({
                 type: '📜 SCRIPT CONTENT',
                 tag: 'script',
@@ -57,7 +144,9 @@
                 class: script.className || '-',
                 path: getPath(script),
                 html: script.outerHTML,
-                context: content.substring(0, 100)
+                context: content.substring(0, 150),
+                matchedEncoding: matchedEnc,
+                originalQuery: q
             });
         }
     });
@@ -80,9 +169,18 @@
         return p.join(' > ');
     }
     
+    function detectEncodingType(encoded, original) {
+        if(encoded === original) return '✅ RAW';
+        if(encoded.includes('%3c') || encoded.includes('%3C')) return '🔐 URL ENCODED (<> → %3c%3e)';
+        if(encoded.includes('&lt;') || encoded.includes('&gt;')) return '🔐 HTML ENTITY (<> → &lt;&gt;)';
+        if(encoded.includes('\\u003c') || encoded.includes('\\u003e')) return '🔐 UNICODE ESCAPE (<> → \\u003c\\u003e)';
+        if(encoded.toLowerCase() === original.toLowerCase()) return '🔐 CASE INSENSITIVE';
+        return '🔐 ENCODED VARIANT';
+    }
+    
     // Buka tab baru
     let win = window.open();
-    win.document.write(`<html><head><title>Data Flow Tracer - ${q}</title>
+    win.document.write(`<html><head><title>Data Flow Tracer - ${q} (${encodings.length} encoding variants)</title>
     <style>
         body{background:#0a0e27;color:#00ff88;font-family:'Courier New',monospace;padding:20px;margin:0}
         .item{background:#1a1f3a;margin:12px 0;padding:12px;border-left:4px solid #ff4444;border-radius:5px}
@@ -92,18 +190,21 @@
         h1{color:#ff4444}
         button{background:#ff4444;color:#fff;border:none;padding:6px 12px;cursor:pointer;border-radius:5px;margin:5px;font-size:11px}
         .sink-badge{background:#ff0000;color:#fff;padding:2px 8px;border-radius:4px;font-size:10px;display:inline-block;margin-left:10px}
+        .encoding-badge{background:#ff8800;color:#000;padding:2px 8px;border-radius:4px;font-size:10px;display:inline-block;margin-left:10px}
         .counter{background:#ff4444;color:#fff;padding:5px 12px;border-radius:5px;display:inline-block;margin:10px 0}
         .small-info{color:#888;font-size:10px;margin:3px 0}
+        .encoding-info{color:#ffaa00;font-size:10px;margin:4px 0}
     </style></head><body>
-    <h1>🔍 DATA FLOW TRACER (NO DEDUPLICATION)</h1>
-    <div>Query: <strong style="color:#ffaa00">${escapeHtml(q)}</strong></div>
-    <div class="counter">📊 TOTAL DITEMUKAN: ${results.length} lokasi (dari ${totalHits} hit)</div>
+    <h1>🔍 DATA FLOW TRACER (ENCODING AWARE)</h1>
+    <div>Original Query: <strong style="color:#ffaa00">${escapeHtml(q)}</strong></div>
+    <div>Encoding Variants: <strong style="color:#00ff88">${encodings.length}</strong> kemungkinan</div>
+    <div class="counter">📊 TOTAL DITEMUKAN: ${results.length} lokasi</div>
     <button onclick="copySemua()">📋 Copy SEMUA HTML</button>
     <button onclick="copySummary()">📋 Copy Summary</button>
     <hr>`);
     
     if(results.length === 0) {
-        win.document.write(`<div style="color:#ff8888">✗ "${escapeHtml(q)}" TIDAK DITEMUKAN di DOM</div>
+        win.document.write(`<div style="color:#ff8888">✗ "${escapeHtml(q)}" TIDAK DITEMUKAN di DOM (termasuk encoding variants)</div>
         <div style="color:#888">💡 Pastikan query sudah muncul di halaman (cari dulu di webnya)</div>`);
     } else {
         results.forEach((r, i) => {
@@ -112,16 +213,21 @@
                 sinkNote = '<span class="sink-badge">⚠️ POTENSI SINK!</span>';
             }
             
+            let encType = detectEncodingType(r.matchedEncoding, q);
+            let encBadge = `<span class="encoding-badge">${encType}</span>`;
+            
             win.document.write(`<div class="item" id="item-${i}">
                 <div>
                     <span class="tag">📍 ${r.tag}</span> | ${r.type}
                     ${sinkNote}
+                    ${encBadge}
                     <button onclick="copyItem(${i})" style="float:right;padding:2px 8px">📋 Copy</button>
                 </div>
                 <div class="path">📁 ${r.path}</div>
                 ${r.id !== '-' ? `<div>🆔 ID: ${r.id}</div>` : ''}
                 ${r.class !== '-' ? `<div>📚 Class: ${r.class.substring(0, 80)}</div>` : ''}
                 ${r.attrName ? `<div>🔑 Attribute: ${r.attrName} = "${escapeHtml(r.attrValue)}"</div>` : ''}
+                <div class="encoding-info">🔐 Ditemukan sebagai: ${escapeHtml(r.matchedEncoding)}</div>
                 ${r.context ? `<div class="small-info">💬 Context: "${escapeHtml(r.context)}"</div>` : ''}
                 <div style="margin-top:8px">
                     <div style="color:#ffaa00">📄 FULL ELEMENT HTML:</div>
@@ -141,7 +247,7 @@
         
         function copySummary() {
             let summary = results.map((r,i) => {
-                return \`[\${i+1}] \${r.type} @ \${r.tag}\\nPath: \${r.path}\\n\`;
+                return \`[\${i+1}] \${r.type} @ \${r.tag}\\nPath: \${r.path}\\nEncoding: \${r.matchedEncoding}\\n\`;
             }).join('\\n');
             navigator.clipboard.writeText(summary).then(() => alert('Summary ${results.length} item di-copy'));
         }
