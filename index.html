@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOM XSS Flow Tracer - Loader</title>
+    <style>
+        body { font-family: monospace; background: #0a0e27; color: #0f0; padding: 20px; }
+        .status { background: #1a1f3a; padding: 15px; border-left: 4px solid #0f0; }
+        .error { border-left-color: #f00; color: #f66; }
+        button { background: #2a2f4a; color: #0f0; border: 1px solid #0f0; padding: 10px 20px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>🧨 DOM XSS Data Flow Tracer</h1>
+    <div class="status" id="status">🟢 Tool ready. Drag bookmarklet below to your browser bar:</div>
+    <br>
+    <div id="bookmarklet-code" style="background: #000; padding: 15px; border-radius: 5px; word-break: break-all; font-size: 12px;"></div>
+    <br>
+    <button onclick="copyBookmarklet()">📋 Copy Bookmarklet</button>
+    
+    <script>
+        const JS_URL = 'https://1amkaizen.github.io/flowxss/'; // GANTI INI!
+        const bookmarklet = `javascript:(function(){let script=document.createElement('script');script.src='${JS_URL}?t='+Date.now();document.head.appendChild(script);})();`;
+        document.getElementById('bookmarklet-code').innerText = bookmarklet;
+        window.copyBookmarklet = () => {
+            navigator.clipboard.writeText(bookmarklet);
+            alert('Bookmarklet copied! Drag to bookmarks bar or paste as new bookmark URL.');
+        };
+    </script>
+</body>
+</html>
