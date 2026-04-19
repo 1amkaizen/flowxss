@@ -11,6 +11,7 @@
             #flow-panel .item{background:#0d1117;margin:6px 0;padding:6px;border-left:3px solid #ffaa00;border-radius:3px;word-break:break-all}
             #flow-panel .tag{color:#ffaa00;font-weight:bold}
             .close-btn{cursor:pointer;background:none;border:none;color:#1a1e2a;font-size:16px}
+            .real-result{background:#0a1a2a;border-left-color:#00ff88}
         </style>
         <div class="head">
             <span>🔍 DATA FLOW TRACER</span>
@@ -30,7 +31,6 @@
     `;
     document.body.appendChild(panel);
     
-    // Draggable
     let header = panel.querySelector('.head'), pos1=0,pos2=0,pos3=0,pos4=0;
     header.onmousedown = (e) => { e.preventDefault(); pos3=e.clientX; pos4=e.clientY; document.onmouseup=()=>{document.onmouseup=null;document.onmousemove=null}; document.onmousemove=(e)=>{e.preventDefault(); pos1=pos3-e.clientX; pos2=pos4-e.clientY; pos3=e.clientX; pos4=e.clientY; panel.style.top=(panel.offsetTop-pos2)+'px'; panel.style.left=(panel.offsetLeft-pos1)+'px'; panel.style.bottom='auto'; panel.style.right='auto'}};
     
@@ -45,57 +45,66 @@
         targetValue = input.value.trim();
         if(!targetValue) { alert('Isi kata yang mau dilacak!'); return; }
         let resultDiv = document.getElementById('result-area');
-        resultDiv.innerHTML = `<div style="color:#00ff88">🔍 Melacak "${targetValue}" di seluruh DOM...</div>`;
+        resultDiv.innerHTML = `<div style="color:#00ff88">🔍 Melacak "${targetValue}" di SEMUA DOM (kecuali panel ini)...</div>`;
         setTimeout(() => {
             let found = scanDOMForValue(targetValue);
             displayResults(found);
             highlightElements(found);
-        }, 100);
+        }, 200);
     }
     
     function scanDOMForValue(val) {
         let results = [];
         let lowerVal = val.toLowerCase();
+        let panelElement = document.getElementById('flow-panel');
         
-        // Text nodes
+        // Text nodes (skip panel sendiri)
         let walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-            acceptNode: n => n.textContent && n.textContent.toLowerCase().includes(lowerVal) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP
+            acceptNode: n => {
+                if(panelElement && panelElement.contains(n)) return NodeFilter.FILTER_SKIP;
+                return (n.textContent && n.textContent.toLowerCase().includes(lowerVal)) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+            }
         });
         while(walker.nextNode()) {
             let node = walker.currentNode;
             let parent = node.parentElement;
-            if(parent) {
+            if(parent && !panelElement.contains(parent)) {
                 results.push({
                     type: '📝 TEXT',
                     tag: parent.tagName,
                     path: getPath(parent),
-                    sample: node.textContent.substring(0, 100)
+                    sample: node.textContent.substring(0, 150),
+                    element: parent
                 });
             }
         }
         
-        // Attributes
+        // Attributes (skip panel)
         document.querySelectorAll('*').forEach(el => {
+            if(panelElement && panelElement.contains(el)) return;
             for(let attr of el.attributes) {
                 if(attr.value && attr.value.toLowerCase().includes(lowerVal)) {
                     results.push({
                         type: `🔑 ATTR [${attr.name}]`,
                         tag: el.tagName,
                         path: getPath(el),
-                        sample: attr.value.substring(0, 100)
+                        sample: attr.value.substring(0, 150),
+                        element: el
                     });
                 }
             }
         });
         
-        // Input values
+        // Input values (skip panel)
         document.querySelectorAll('input, textarea, select').forEach(el => {
+            if(panelElement && panelElement.contains(el)) return;
             if(el.value && el.value.toLowerCase().includes(lowerVal)) {
                 results.push({
                     type: '✏️ INPUT VALUE',
                     tag: el.tagName,
                     path: getPath(el),
-                    sample: el.value.substring(0, 100)
+                    sample: el.value.substring(0, 150),
+                    element: el
                 });
             }
         });
@@ -106,15 +115,16 @@
     function getPath(el) {
         if(!el) return 'unknown';
         let path = [];
-        while(el && el.nodeType === 1) {
-            let selector = el.tagName.toLowerCase();
-            if(el.id) { selector += '#' + el.id; path.unshift(selector); break; }
-            if(el.className && typeof el.className === 'string') {
-                let classes = el.className.split(' ').slice(0,2).join('.');
+        let temp = el;
+        while(temp && temp.nodeType === 1 && temp !== document.body) {
+            let selector = temp.tagName.toLowerCase();
+            if(temp.id) { selector += '#' + temp.id; path.unshift(selector); break; }
+            if(temp.className && typeof temp.className === 'string') {
+                let classes = temp.className.split(' ').filter(c => c && !c.includes('flow-panel')).slice(0,2).join('.');
                 if(classes) selector += '.' + classes;
             }
             path.unshift(selector);
-            el = el.parentNode;
+            temp = temp.parentNode;
         }
         return path.join(' > ');
     }
@@ -125,45 +135,62 @@
         if(!style) {
             style = document.createElement('style');
             style.id = 'flow-highlight-style';
-            style.textContent = '.flow-highlight { outline: 3px solid #ffaa00 !important; background: rgba(255,170,0,0.2) !important; transition: 0.2s; }';
+            style.textContent = '.flow-highlight { outline: 3px solid #ffaa00 !important; background: rgba(255,170,0,0.3) !important; transition: 0.2s; }';
             document.head.appendChild(style);
         }
         results.forEach(r => {
-            if(r.path !== 'unknown') {
-                let selector = r.path.split(' > ').pop();
-                try {
-                    let el = document.querySelector(selector);
-                    if(el) el.classList.add('flow-highlight');
-                } catch(e) {}
+            if(r.element) {
+                r.element.classList.add('flow-highlight');
             }
         });
         setTimeout(() => {
             document.querySelectorAll('.flow-highlight').forEach(el => el.classList.remove('flow-highlight'));
-        }, 3000);
+        }, 4000);
     }
     
     function displayResults(results) {
         let resultDiv = document.getElementById('result-area');
-        if(results.length === 0) {
-            resultDiv.innerHTML = `<div style="color:#ff8888">✗ "${targetValue}" tidak ditemukan di DOM</div>
-                                   <div style="color:#888; margin-top:8px">💡 Coba cari dulu di websitenya, lalu klik LACAK lagi</div>`;
+        
+        // Filter out results from panel itself
+        let realResults = results.filter(r => {
+            return !r.path.includes('flow-panel') && !r.sample.includes('Melacak');
+        });
+        
+        if(realResults.length === 0) {
+            resultDiv.innerHTML = `<div style="color:#ff8888">✗ "${targetValue}" TIDAK DITEMUKAN di DOM website</div>
+                                   <div style="color:#888; margin-top:8px">💡 Tips:<br>
+                                   • Udah cari dulu di websitenya?<br>
+                                   • Mungkin hasil via AJAX? Coba scroll atau klik dulu<br>
+                                   • Kata "Babi" emang gak ada di halaman ini</div>`;
             return;
         }
-        let html = `<div style="margin-bottom:8px">✅ Ditemukan <strong style="color:#ffaa00">${results.length}</strong> lokasi:</div>`;
-        results.forEach((r, i) => {
-            html += `<div class="item">
+        
+        let html = `<div style="margin-bottom:8px">✅ Ditemukan <strong style="color:#00ff88">${realResults.length}</strong> lokasi REAL di halaman:</div>`;
+        realResults.forEach((r, i) => {
+            let displayPath = r.path.length > 60 ? r.path.substring(0,60)+'...' : r.path;
+            html += `<div class="item real-result">
                         <div><span class="tag">📍 ${r.tag}</span> | ${r.type}</div>
-                        <div style="font-size:10px; color:#88aaff">${r.path}</div>
+                        <div style="font-size:10px; color:#88aaff; word-break:break-all">${displayPath}</div>
                         <div style="font-size:10px; color:#aaa; margin-top:4px">💾 "${escapeHtml(r.sample)}"</div>
                      </div>`;
         });
         html += `<div style="margin-top:10px; font-size:10px; color:#aaa; border-top:1px solid #333; padding-top:6px">
-                    🟡 Highlight kuning = lokasi data di halaman
+                    🟡 Element yang mengandung kata "${targetValue}" sudah di-highlight kuning
                  </div>`;
         resultDiv.innerHTML = html;
     }
     
-    function escapeHtml(str) { return str.replace(/[&<>]/g, function(m) { if(m === '&') return '&amp;'; if(m === '<') return '&lt;'; if(m === '>') return '&gt;'; return m;}); }
+    function escapeHtml(str) { 
+        if(!str) return '';
+        return str.replace(/[&<>]/g, function(m) { 
+            if(m === '&') return '&amp;'; 
+            if(m === '<') return '&lt;'; 
+            if(m === '>') return '&gt;'; 
+            return m;
+        }).replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, function(c) {
+            return c;
+        });
+    }
     
     function clearResults() {
         document.getElementById('result-area').innerHTML = '<div style="color:#888;text-align:center">⬆ Ketik kata, klik LACAK</div>';
@@ -171,5 +198,6 @@
         targetValue = '';
     }
     
-    console.log('✅ DATA FLOW TRACER siap! Ketik kata lalu klik LACAK');
+    console.log('✅ DATA FLOW TRACER v2 - SKIP PANEL SENDIRI');
+    console.log('💡 Cara pake: 1. Cari dulu di website 2. Lalu klik LACAK di tool ini');
 })();
